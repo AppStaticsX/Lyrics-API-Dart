@@ -5,11 +5,7 @@ import '../models/metadata_response.dart';
 import '../models/recommendation_response.dart';
 
 /// Platform types supported by the API
-enum Platform {
-  spotify,
-  musixmatch,
-  genius,
-}
+enum Platform { spotify, musixmatch, genius, lrclib }
 
 /// Exception thrown when API request fails
 class LyricsApiException implements Exception {
@@ -37,7 +33,7 @@ class LyricsApiService {
   http.Client get _client => client ?? http.Client();
 
   /// Get lyrics by track ID
-  /// 
+  ///
   /// [platform] - The platform to fetch from (spotify, musixmatch, genius)
   /// [trackId] - The track ID from the platform
   /// [translate] - Optional language code for translation (e.g., 'es', 'fr')
@@ -55,7 +51,7 @@ class LyricsApiService {
   }
 
   /// Get lyrics by title and artist
-  /// 
+  ///
   /// [platform] - The platform to fetch from
   /// [title] - The song title
   /// [artist] - The artist name
@@ -81,9 +77,93 @@ class LyricsApiService {
     Map<String, String> params,
   ) async {
     try {
+      // Handle LRCLIB specially as it has a different API structure and host
+      if (platform == Platform.lrclib) {
+        String? title = params['title'];
+        String? artist = params['artist'];
+
+        // Clean up artist
+        if (artist != null &&
+            (artist.toLowerCase() == 'unknown' || artist.trim().isEmpty)) {
+          artist = null;
+        }
+
+        // Helper to parse LRCLIB JSON
+        LyricsResponse parseLrcLibJson(Map<String, dynamic> data) {
+          return LyricsResponse(
+            success: true,
+            data: LyricsData(
+              trackId: data['id']?.toString(),
+              title: data['trackName'],
+              artist: data['artistName'],
+              lyrics: data['plainLyrics'] ?? data['syncedLyrics'],
+              platform: 'lrclib',
+              language: 'en',
+            ),
+          );
+        }
+
+        // Strategy 1: Direct Get (if we have both title and artist)
+        if (title != null &&
+            title.isNotEmpty &&
+            artist != null &&
+            artist.isNotEmpty) {
+          final uri = Uri.parse('https://lrclib.net/api/get').replace(
+            queryParameters: {'track_name': title, 'artist_name': artist},
+          );
+
+          final response = await _client.get(uri).timeout(timeout);
+
+          if (response.statusCode == 200) {
+            return parseLrcLibJson(json.decode(response.body));
+          }
+          // If 404 or 400, fall through to search
+        }
+
+        // Strategy 2: Search (fallback)
+        final searchQuery = [
+          title,
+          artist,
+        ].where((s) => s != null && s.isNotEmpty).join(' ');
+        if (searchQuery.isEmpty) {
+          return LyricsResponse(
+            success: false,
+            message: 'Not enough info to search lyrics',
+          );
+        }
+
+        final searchUri = Uri.parse(
+          'https://lrclib.net/api/search',
+        ).replace(queryParameters: {'q': searchQuery});
+
+        final searchResponse = await _client.get(searchUri).timeout(timeout);
+
+        if (searchResponse.statusCode == 200) {
+          final List<dynamic> results = json.decode(searchResponse.body);
+          if (results.isNotEmpty) {
+            // Pick the first result that has lyrics
+            for (final item in results) {
+              if (item['plainLyrics'] != null || item['syncedLyrics'] != null) {
+                return parseLrcLibJson(item);
+              }
+            }
+            // If no items had lyrics, just use the first one anyway or fail?
+            // Usually they do have lyrics if returned.
+            return parseLrcLibJson(results.first);
+          }
+          return LyricsResponse(success: false, message: 'Lyrics not found');
+        } else {
+          throw LyricsApiException(
+            'Failed to search lyrics from LRCLIB: ${searchResponse.body}',
+            searchResponse.statusCode,
+          );
+        }
+      }
+
       final platformName = platform.name;
-      final uri = Uri.parse('$baseUrl/v2/$platformName/lyrics')
-          .replace(queryParameters: params);
+      final uri = Uri.parse(
+        '$baseUrl/v2/$platformName/lyrics',
+      ).replace(queryParameters: params);
 
       final response = await _client.get(uri).timeout(timeout);
 
@@ -108,7 +188,7 @@ class LyricsApiService {
   }
 
   /// Get metadata for a track
-  /// 
+  ///
   /// [platform] - The platform to fetch from
   /// [title] - The song title to search for
   Future<MetadataResponse> getMetadata({
@@ -117,8 +197,9 @@ class LyricsApiService {
   }) async {
     try {
       final platformName = platform.name;
-      final uri = Uri.parse('$baseUrl/v2/$platformName/metadata')
-          .replace(queryParameters: {'title': title});
+      final uri = Uri.parse(
+        '$baseUrl/v2/$platformName/metadata',
+      ).replace(queryParameters: {'title': title});
 
       final response = await _client.get(uri).timeout(timeout);
 
@@ -143,7 +224,7 @@ class LyricsApiService {
   }
 
   /// Get recommended tracks
-  /// 
+  ///
   /// [platform] - The platform to fetch from
   /// [country] - Optional country code (e.g., 'US', 'GB', 'FR')
   Future<RecommendationResponse> getRecommendations({
@@ -152,12 +233,11 @@ class LyricsApiService {
   }) async {
     try {
       final platformName = platform.name;
-      final params = {
-        if (country != null) 'country': country,
-      };
+      final params = {if (country != null) 'country': country};
 
-      final uri = Uri.parse('$baseUrl/v2/$platformName/recommendation')
-          .replace(queryParameters: params.isNotEmpty ? params : null);
+      final uri = Uri.parse(
+        '$baseUrl/v2/$platformName/recommendation',
+      ).replace(queryParameters: params.isNotEmpty ? params : null);
 
       final response = await _client.get(uri).timeout(timeout);
 
