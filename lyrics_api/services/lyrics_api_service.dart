@@ -1,8 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/lyrics_response.dart';
-import '../models/metadata_response.dart';
-import '../models/recommendation_response.dart';
 
 /// Platform types supported by the API
 enum Platform { spotify, musixmatch, genius, lrclib }
@@ -96,7 +94,7 @@ class LyricsApiService {
               trackId: data['id']?.toString(),
               title: data['trackName'],
               artist: data['artistName'],
-              lyrics: data['plainLyrics'] ?? data['syncedLyrics'],
+              lyrics: data['syncedLyrics'] ?? data['plainLyrics'],
               platform: 'lrclib',
               language: 'en',
             ),
@@ -121,11 +119,15 @@ class LyricsApiService {
         }
 
         // Strategy 2: Search (fallback)
-        final searchQuery = [
-          title,
-          artist,
-        ].where((s) => s != null && s.isNotEmpty).join(' ');
-        if (searchQuery.isEmpty) {
+        final Map<String, String> searchParams = {};
+        if (title != null && title.isNotEmpty) {
+          searchParams['track_name'] = title;
+        }
+        if (artist != null && artist.isNotEmpty) {
+          searchParams['artist_name'] = artist;
+        }
+
+        if (searchParams.isEmpty) {
           return LyricsResponse(
             success: false,
             message: 'Not enough info to search lyrics',
@@ -134,7 +136,7 @@ class LyricsApiService {
 
         final searchUri = Uri.parse(
           'https://lrclib.net/api/search',
-        ).replace(queryParameters: {'q': searchQuery});
+        ).replace(queryParameters: searchParams);
 
         final searchResponse = await _client.get(searchUri).timeout(timeout);
 
@@ -178,80 +180,6 @@ class LyricsApiService {
       } else {
         throw LyricsApiException(
           'Failed to fetch lyrics: ${response.body}',
-          response.statusCode,
-        );
-      }
-    } catch (e) {
-      if (e is LyricsApiException) rethrow;
-      throw LyricsApiException('Request failed: $e');
-    }
-  }
-
-  /// Get metadata for a track
-  ///
-  /// [platform] - The platform to fetch from
-  /// [title] - The song title to search for
-  Future<MetadataResponse> getMetadata({
-    required Platform platform,
-    required String title,
-  }) async {
-    try {
-      final platformName = platform.name;
-      final uri = Uri.parse(
-        '$baseUrl/v2/$platformName/metadata',
-      ).replace(queryParameters: {'title': title});
-
-      final response = await _client.get(uri).timeout(timeout);
-
-      if (response.statusCode == 200) {
-        final jsonData = json.decode(response.body);
-        return MetadataResponse.fromJson(jsonData);
-      } else if (response.statusCode == 429) {
-        throw LyricsApiException(
-          'Rate limit exceeded. Please try again later.',
-          response.statusCode,
-        );
-      } else {
-        throw LyricsApiException(
-          'Failed to fetch metadata: ${response.body}',
-          response.statusCode,
-        );
-      }
-    } catch (e) {
-      if (e is LyricsApiException) rethrow;
-      throw LyricsApiException('Request failed: $e');
-    }
-  }
-
-  /// Get recommended tracks
-  ///
-  /// [platform] - The platform to fetch from
-  /// [country] - Optional country code (e.g., 'US', 'GB', 'FR')
-  Future<RecommendationResponse> getRecommendations({
-    required Platform platform,
-    String? country,
-  }) async {
-    try {
-      final platformName = platform.name;
-      final params = {if (country != null) 'country': country};
-
-      final uri = Uri.parse(
-        '$baseUrl/v2/$platformName/recommendation',
-      ).replace(queryParameters: params.isNotEmpty ? params : null);
-
-      final response = await _client.get(uri).timeout(timeout);
-
-      if (response.statusCode == 200) {
-        final jsonData = json.decode(response.body);
-        return RecommendationResponse.fromJson(jsonData);
-      } else if (response.statusCode == 429) {
-        throw LyricsApiException(
-          'Rate limit exceeded. Please try again later.',
-          response.statusCode,
-        );
-      } else {
-        throw LyricsApiException(
-          'Failed to fetch recommendations: ${response.body}',
           response.statusCode,
         );
       }
